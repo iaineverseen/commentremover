@@ -295,28 +295,28 @@
 
         <div class="controls">
             <div class="controls-grid">
-                <div class="control" onclick="toggleCheckbox('removeBlankLines')">
-                    <input type="checkbox" id="removeBlankLines" onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="removeBlankLines">
                     <label for="removeBlankLines">Remove Blank Lines</label>
                 </div>
-                <div class="control" onclick="toggleCheckbox('trimWhitespace')">
-                    <input type="checkbox" id="trimWhitespace" checked onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="trimWhitespace" checked>
                     <label for="trimWhitespace">Trim Whitespace</label>
                 </div>
-                <div class="control" onclick="toggleCheckbox('smartSpacing')">
-                    <input type="checkbox" id="smartSpacing" checked onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="smartSpacing" checked>
                     <label for="smartSpacing">Smart Spacing</label>
                 </div>
-                <div class="control" onclick="toggleCheckbox('preserveIndentation')">
-                    <input type="checkbox" id="preserveIndentation" checked onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="preserveIndentation" checked>
                     <label for="preserveIndentation">Preserve Indentation</label>
                 </div>
-                <div class="control" onclick="toggleCheckbox('normalizeLineEndings')">
-                    <input type="checkbox" id="normalizeLineEndings" checked onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="normalizeLineEndings" checked>
                     <label for="normalizeLineEndings">Normalize Line Endings</label>
                 </div>
-                <div class="control" onclick="toggleCheckbox('trimBraceSpaces')">
-                    <input type="checkbox" id="trimBraceSpaces" checked onclick="event.stopPropagation()">
+                <div class="control">
+                    <input type="checkbox" id="trimBraceSpaces" checked>
                     <label for="trimBraceSpaces">Trim Brace Spaces</label>
                 </div>
             </div>
@@ -383,12 +383,6 @@
         function handleDrop(e) {
             const files = e.dataTransfer.files;
             if (files.length > 0) handleFile(files[0]);
-        }
-
-        function toggleCheckbox(id) {
-            const checkbox = document.getElementById(id);
-            checkbox.checked = !checkbox.checked;
-            checkbox.dispatchEvent(new Event('change'));
         }
 
         function removeComments() {
