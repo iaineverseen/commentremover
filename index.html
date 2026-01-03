@@ -361,7 +361,7 @@
         function generateRandomFilename() {
             const chars = '0123456789abcdef';
             let result = '';
-            for (let i = 0; i < 24; i++) {
+            for (let i = 0; i < 16; i++) {
                 result += chars[Math.floor(Math.random() * chars.length)];
             }
             return result + '.lua';
@@ -434,16 +434,23 @@
                 const char = code[i];
                 const nextChar = i + 1 < code.length ? code[i + 1] : '';
                 
+                // Skip whitespace at start of line for better detection
+                const lineStart = findLineStart(result);
+                const currentLineContent = result.slice(lineStart);
+                
+                // Handle single-quoted strings with full escape support
                 if (char === "'") {
                     const stringResult = parseString(code, i, "'");
                     result += stringResult.content;
                     i = stringResult.endIndex;
                 }
+                // Handle double-quoted strings with full escape support
                 else if (char === '"') {
                     const stringResult = parseString(code, i, '"');
                     result += stringResult.content;
                     i = stringResult.endIndex;
                 }
+                // Handle long string literals [[ ]] or [=[ ]=] with any nesting level
                 else if (char === '[') {
                     const longBracketMatch = matchLongBracket(code, i, false);
                     if (longBracketMatch) {
@@ -454,42 +461,44 @@
                         i++;
                     }
                 }
+                // Handle all comment types: -- (single line) and --[[ ]] (multi-line)
                 else if (char === '-' && nextChar === '-') {
                     processingStats.commentsRemoved++;
                     
+                    // Check if it's a multi-line comment --[[ or --[=[
                     const commentMatch = matchLongBracket(code, i + 2, true);
                     if (commentMatch) {
-                        const lineStart = findLineStart(result);
-                        const hasCodeBefore = result.slice(lineStart).trim().length > 0;
+                        // Multi-line comment detected
+                        const hasCodeBefore = currentLineContent.trim().length > 0;
                         
                         i = commentMatch.endIndex;
                         
-                        if (!hasCodeBefore && i < code.length && code[i] === '\n') {
-                            result += '\n';
-                            i++;
-                        } else if (hasCodeBefore && i < code.length && code[i] === '\n') {
+                        // Smart newline preservation for multi-line comments
+                        // Keep structure intact while removing comment content
+                        if (i < code.length && code[i] === '\n') {
+                            // If comment was on its own line, keep one newline
+                            // If comment was after code, keep one newline
                             result += '\n';
                             i++;
                         }
                     } else {
-                        const lineStart = findLineStart(result);
-                        const lineContent = result.slice(lineStart);
-                        const hasCodeBefore = lineContent.trim().length > 0;
+                        // Single-line comment detected
+                        const hasCodeBefore = currentLineContent.trim().length > 0;
                         
+                        // Skip all characters until end of line
                         while (i < code.length && code[i] !== '\n') {
                             i++;
                         }
                         
+                        // Intelligent newline handling
                         if (i < code.length && code[i] === '\n') {
-                            if (hasCodeBefore) {
-                                result += '\n';
-                            } else {
-                                result += '\n';
-                            }
+                            // Always preserve the newline to maintain structure
+                            result += '\n';
                             i++;
                         }
                     }
                 }
+                // Regular code characters - preserve as-is
                 else {
                     result += char;
                     i++;
@@ -514,53 +523,70 @@
             while (i < code.length) {
                 const char = code[i];
                 
+                // Advanced escape sequence handling with full Lua 5.1-5.4 compatibility
                 if (char === '\\' && i + 1 < code.length) {
                     const nextChar = code[i + 1];
                     
+                    // Standard single-character escapes: \a \b \f \n \r \t \v \\ \" \'
                     if ('abfnrtv\\"\''.includes(nextChar)) {
                         content += char + nextChar;
                         i += 2;
                     }
+                    // Line continuation: backslash followed by actual newline
                     else if (nextChar === '\n') {
                         content += char + nextChar;
                         i += 2;
                     }
+                    // \z: skip all subsequent whitespace characters (Lua 5.2+)
                     else if (nextChar === 'z') {
                         content += char + nextChar;
                         i += 2;
+                        // Skip all whitespace after \z
                         while (i < code.length && /\s/.test(code[i])) {
                             content += code[i];
                             i++;
                         }
                     }
+                    // \xXX: hexadecimal byte escape (exactly 2 hex digits required)
                     else if (nextChar === 'x') {
-                        if (i + 3 < code.length && /[0-9a-fA-F]/.test(code[i + 2]) && /[0-9a-fA-F]/.test(code[i + 3])) {
+                        // Validate that next 2 characters are valid hex digits
+                        if (i + 3 < code.length && 
+                            /[0-9a-fA-F]/.test(code[i + 2]) && 
+                            /[0-9a-fA-F]/.test(code[i + 3])) {
                             content += code.slice(i, i + 4);
                             i += 4;
                         } else {
+                            // Invalid hex escape - preserve backslash and continue
                             content += char;
                             i++;
                         }
                     }
+                    // \ddd: decimal byte escape (1-3 decimal digits, value must be 0-255)
                     else if (/\d/.test(nextChar)) {
                         let j = i + 1;
                         let decimalValue = '';
+                        // Collect up to 3 decimal digits
                         while (j < code.length && j < i + 4 && /\d/.test(code[j])) {
                             decimalValue += code[j];
                             j++;
                         }
+                        // Validate that decimal value is in valid byte range (0-255)
                         const value = parseInt(decimalValue, 10);
                         if (value <= 255) {
                             content += code.slice(i, j);
                             i = j;
                         } else {
+                            // Value exceeds 255 - only use first digit to stay in range
                             content += code.slice(i, i + 2);
                             i += 2;
                         }
                     }
+                    // \u{XXX}: Unicode escape sequence (Lua 5.3+)
+                    // Supports variable-length hex sequences in braces
                     else if (nextChar === 'u' && i + 2 < code.length && code[i + 2] === '{') {
                         let j = i + 3;
                         let validHex = true;
+                        // Validate all characters until closing brace are hex digits
                         while (j < code.length && code[j] !== '}') {
                             if (!/[0-9a-fA-F]/.test(code[j])) {
                                 validHex = false;
@@ -568,24 +594,29 @@
                             }
                             j++;
                         }
-                        if (j < code.length && code[j] === '}' && validHex) {
+                        // If properly formed unicode escape, include it
+                        if (j < code.length && code[j] === '}' && validHex && j > i + 3) {
                             content += code.slice(i, j + 1);
                             i = j + 1;
                         } else {
+                            // Malformed unicode escape - preserve backslash
                             content += char;
                             i++;
                         }
                     }
+                    // Unknown/invalid escape sequence - preserve the backslash
                     else {
                         content += char;
                         i++;
                     }
                 }
+                // Found matching closing quote - end of string
                 else if (char === quoteChar) {
                     content += char;
                     i++;
                     break;
                 }
+                // Regular character within string - preserve as-is
                 else {
                     content += char;
                     i++;
@@ -596,37 +627,47 @@
         }
 
         function matchLongBracket(code, startIndex, isComment) {
+            // Long brackets in Lua: [[ ]], [=[ ]=], [==[ ]==], etc.
+            // The number of '=' signs must match between opening and closing
+            
             if (startIndex >= code.length || code[startIndex] !== '[') return null;
             
             let i = startIndex + 1;
             let equalsCount = 0;
             
+            // Count the number of '=' signs in the opening bracket
             while (i < code.length && code[i] === '=') {
                 equalsCount++;
                 i++;
             }
             
+            // Must be followed by another '[' to form valid opening bracket
             if (i >= code.length || code[i] !== '[') return null;
             
             const openingBracket = '[' + '='.repeat(equalsCount) + '[';
             const closingBracket = ']' + '='.repeat(equalsCount) + ']';
             
-            i++;
+            i++; // Move past the second '['
             
+            // Search for the matching closing bracket with exact same number of '='
             while (i < code.length) {
                 if (code[i] === ']') {
                     let j = i + 1;
                     let closingEquals = 0;
                     
+                    // Count '=' signs in potential closing bracket
                     while (j < code.length && code[j] === '=' && closingEquals < equalsCount) {
                         closingEquals++;
                         j++;
                     }
                     
+                    // Check if this is the exact matching closing bracket
                     if (closingEquals === equalsCount && j < code.length && code[j] === ']') {
                         if (isComment) {
+                            // For multi-line comments, return empty content (removing it)
                             return { content: '', endIndex: j + 1 };
                         } else {
+                            // For long string literals, preserve entire content including brackets
                             return { 
                                 content: code.substring(startIndex, j + 1), 
                                 endIndex: j + 1 
@@ -637,6 +678,7 @@
                 i++;
             }
             
+            // No matching closing bracket found - not a valid long bracket syntax
             return null;
         }
 
@@ -647,49 +689,90 @@
             const preserveIndentation = document.getElementById('preserveIndentation').checked;
             const normalizeLineEndings = document.getElementById('normalizeLineEndings').checked;
 
+            // Step 1: Normalize all line endings to Unix format (LF)
+            // Converts Windows (CRLF) and old Mac (CR) to consistent LF
             if (normalizeLineEndings) {
                 code = code.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             }
 
             let lines = code.split('\n');
 
+            // Step 2: Remove trailing whitespace from each line
+            // This cleans up spaces/tabs at the end of lines
             if (trimWhitespace) {
                 lines = lines.map(line => line.trimEnd());
             }
 
+            // Step 3: Handle blank line removal or indentation preservation
             if (removeBlankLines) {
+                // Remove all lines that are empty or contain only whitespace
                 lines = lines.filter(line => line.trim().length > 0);
             } else if (!preserveIndentation) {
+                // If not preserving indentation, trim leading whitespace too
                 lines = lines.map(line => line.trim());
             }
 
             let result = lines.join('\n');
 
+            // Step 4: Apply smart spacing to improve code readability
             if (smartSpacing && !removeBlankLines) {
+                // First pass: collapse excessive consecutive blank lines
                 result = result.replace(/\n{3,}/g, '\n\n');
                 
+                // Second pass: intelligently add spacing around code blocks
+                // Using a more sophisticated approach that checks context
                 result = result.replace(/([^\n])\n([^\n])/g, (match, before, after) => {
-                    if (/^\s*(local\s+function|function)\s+/.test(after)) {
+                    const afterTrimmed = after.trim();
+                    
+                    // Add spacing before function declarations
+                    if (/^(local\s+)?function\s+\w+/.test(afterTrimmed)) {
                         return before + '\n\n' + after;
                     }
-                    if (/^\s*(for|while|repeat|if)\s+/.test(after)) {
+                    
+                    // Add spacing before control structures
+                    if (/^(for|while|repeat|if)\s+/.test(afterTrimmed)) {
                         return before + '\n\n' + after;
                     }
+                    
+                    // Add spacing before return statements (unless in a chain)
+                    if (/^return\s+/.test(afterTrimmed) && !before.trim().endsWith(',')) {
+                        return before + '\n\n' + after;
+                    }
+                    
+                    // No spacing needed - preserve original
                     return match;
                 });
                 
+                // Third pass: clean up any triple+ newlines created by above rules
                 result = result.replace(/\n{3,}/g, '\n\n');
+                
+                // Fourth pass: remove leading whitespace from the entire file
                 result = result.replace(/^\n+/, '');
             } else if (!removeBlankLines) {
+                // Without smart spacing, just limit to max 2 consecutive blank lines
                 result = result.replace(/\n{3,}/g, '\n\n');
             }
 
+            // Final step: trim any leading/trailing whitespace from the entire output
             return result.trim();
         }
 
         function trimBraceSpaces(code) {
+            // Advanced brace space trimming for single-line table literals
+            // Only processes tables that fit entirely on one line (no newlines between { and })
+            // Multi-line tables are left untouched to preserve formatting
+            
+            // Match { ... } on a single line (no newlines inside)
             code = code.replace(/\{([^\n\}]*)\}/g, (match, content) => {
+                // Check if this is actually a single-line table by ensuring no newlines
+                if (content.includes('\n')) {
+                    return match; // Multi-line table - don't touch it
+                }
+                
+                // Trim spaces from start and end of content
                 const trimmed = content.replace(/^\s+/, '').replace(/\s+$/, '');
+                
+                // Return compacted version
                 return '{' + trimmed + '}';
             });
             
@@ -741,6 +824,9 @@
                 showToast('Nothing to download', 'error');
                 return;
             }
+
+            // Generate a new random filename for each download
+            currentFilename = generateRandomFilename();
 
             const blob = new Blob([output], { type: 'text/plain;charset=utf-8' });
             const url = URL.createObjectURL(blob);
