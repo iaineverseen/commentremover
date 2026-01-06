@@ -9,6 +9,38 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        *::selection {
+            background: transparent;
+            color: inherit;
+        }
+
+        *::-moz-selection {
+            background: transparent;
+            color: inherit;
+        }
+
+        textarea {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+
+        textarea::selection {
+            background: #264f78;
+            color: #c9d1d9;
+        }
+
+        textarea::-moz-selection {
+            background: #264f78;
+            color: #c9d1d9;
         }
 
         body {
@@ -364,7 +396,7 @@
             for (let i = 0; i < 16; i++) {
                 result += chars[Math.floor(Math.random() * chars.length)];
             }
-            return result + '.lua';
+            return result + '.txt';
         }
 
         const dropZone = document.getElementById('dropZone');
@@ -844,6 +876,7 @@
         function clearInput() {
             document.getElementById('input').value = '';
             document.getElementById('output').value = '';
+            document.getElementById('fileInput').value = ''; // Reset file input
             currentFilename = generateRandomFilename();
             document.getElementById('inputLines').textContent = '0';
             document.getElementById('outputLines').textContent = '0';
