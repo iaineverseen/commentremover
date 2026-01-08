@@ -462,82 +462,266 @@
             let i = 0;
             processingStats.commentsRemoved = 0;
             
-            while (i < code.length) {
+            const len = code.length;
+            
+            // Pre-compile regex patterns for performance
+            const keywordPattern = /^(function|do|then|repeat|if|for|while|local|return|end|else|elseif|until)\b/;
+            
+            while (i < len) {
                 const char = code[i];
-                const nextChar = i + 1 < code.length ? code[i + 1] : '';
                 
-                // Skip whitespace at start of line for better detection
-                const lineStart = findLineStart(result);
-                const currentLineContent = result.slice(lineStart);
+                // Fast path: regular characters (most common case)
+                if (char !== '-' && char !== '"' && char !== "'" && char !== '[') {
+                    result += char;
+                    i++;
+                    continue;
+                }
                 
-                // Handle single-quoted strings with full escape support
-                if (char === "'") {
-                    const stringResult = parseString(code, i, "'");
+                const nextChar = i + 1 < len ? code[i + 1] : '';
+                
+                // Handle strings (all types) with optimized parsing
+                if (char === "'" || char === '"') {
+                    const stringResult = parseStringFast(code, i, char, len);
                     result += stringResult.content;
                     i = stringResult.endIndex;
+                    continue;
                 }
-                // Handle double-quoted strings with full escape support
-                else if (char === '"') {
-                    const stringResult = parseString(code, i, '"');
-                    result += stringResult.content;
-                    i = stringResult.endIndex;
-                }
-                // Handle long string literals [[ ]] or [=[ ]=] with any nesting level
-                else if (char === '[') {
-                    const longBracketMatch = matchLongBracket(code, i, false);
+                
+                // Handle long strings/comments efficiently
+                if (char === '[') {
+                    const longBracketMatch = matchLongBracketFast(code, i, false, len);
                     if (longBracketMatch) {
                         result += longBracketMatch.content;
                         i = longBracketMatch.endIndex;
-                    } else {
-                        result += char;
-                        i++;
+                        continue;
                     }
-                }
-                // Handle all comment types: -- (single line) and --[[ ]] (multi-line)
-                else if (char === '-' && nextChar === '-') {
-                    processingStats.commentsRemoved++;
-                    
-                    // Check if it's a multi-line comment --[[ or --[=[
-                    const commentMatch = matchLongBracket(code, i + 2, true);
-                    if (commentMatch) {
-                        // Multi-line comment detected
-                        const hasCodeBefore = currentLineContent.trim().length > 0;
-                        
-                        i = commentMatch.endIndex;
-                        
-                        // Smart newline preservation for multi-line comments
-                        // Keep structure intact while removing comment content
-                        if (i < code.length && code[i] === '\n') {
-                            // If comment was on its own line, keep one newline
-                            // If comment was after code, keep one newline
-                            result += '\n';
-                            i++;
-                        }
-                    } else {
-                        // Single-line comment detected
-                        const hasCodeBefore = currentLineContent.trim().length > 0;
-                        
-                        // Skip all characters until end of line
-                        while (i < code.length && code[i] !== '\n') {
-                            i++;
-                        }
-                        
-                        // Intelligent newline handling
-                        if (i < code.length && code[i] === '\n') {
-                            // Always preserve the newline to maintain structure
-                            result += '\n';
-                            i++;
-                        }
-                    }
-                }
-                // Regular code characters - preserve as-is
-                else {
                     result += char;
                     i++;
+                    continue;
                 }
+                
+                // Optimized comment detection and removal
+                if (char === '-' && nextChar === '-') {
+                    processingStats.commentsRemoved++;
+                    
+                    // Fast check for multi-line comment
+                    if (i + 2 < len && code[i + 2] === '[') {
+                        const commentMatch = matchLongBracketFast(code, i + 2, true, len);
+                        if (commentMatch) {
+                            i = commentMatch.endIndex;
+                            
+                            // Minimal newline logic for speed
+                            if (i < len && code[i] === '\n') {
+                                result += '\n';
+                                i++;
+                            }
+                            continue;
+                        }
+                    }
+                    
+                    // Single-line comment: fast skip to newline
+                    // Check if there's code before comment on this line
+                    let lineStart = result.length - 1;
+                    while (lineStart >= 0 && result[lineStart] !== '\n') {
+                        lineStart--;
+                    }
+                    const hasCodeBefore = result.slice(lineStart + 1).trim().length > 0;
+                    
+                    // Fast forward to end of line
+                    while (i < len && code[i] !== '\n') {
+                        i++;
+                    }
+                    
+                    // Preserve newline
+                    if (i < len && code[i] === '\n') {
+                        result += '\n';
+                        i++;
+                    }
+                    continue;
+                }
+                
+                // Fallback for edge cases
+                result += char;
+                i++;
             }
             
             return result;
+        }
+        
+        // Optimized string parser with minimal overhead
+        function parseStringFast(code, startIndex, quoteChar, len) {
+            let content = code[startIndex];
+            let i = startIndex + 1;
+            
+            while (i < len) {
+                const char = code[i];
+                
+                // Fast path: non-escape characters
+                if (char !== '\\' && char !== quoteChar) {
+                    content += char;
+                    i++;
+                    continue;
+                }
+                
+                // String terminator
+                if (char === quoteChar) {
+                    content += char;
+                    i++;
+                    break;
+                }
+                
+                // Escape sequence handling
+                if (char === '\\' && i + 1 < len) {
+                    const nextChar = code[i + 1];
+                    
+                    // Common escapes (fast path)
+                    if (nextChar === 'n' || nextChar === 't' || nextChar === 'r' || 
+                        nextChar === '\\' || nextChar === '"' || nextChar === "'" ||
+                        nextChar === 'a' || nextChar === 'b' || nextChar === 'f' ||
+                        nextChar === 'v') {
+                        content += char + nextChar;
+                        i += 2;
+                        continue;
+                    }
+                    
+                    // Newline escape
+                    if (nextChar === '\n') {
+                        content += char + nextChar;
+                        i += 2;
+                        continue;
+                    }
+                    
+                    // \z whitespace skip
+                    if (nextChar === 'z') {
+                        content += char + nextChar;
+                        i += 2;
+                        while (i < len && (code[i] === ' ' || code[i] === '\t' || 
+                               code[i] === '\n' || code[i] === '\r')) {
+                            content += code[i];
+                            i++;
+                        }
+                        continue;
+                    }
+                    
+                    // Hex escape \xXX
+                    if (nextChar === 'x' && i + 3 < len) {
+                        const hex1 = code[i + 2];
+                        const hex2 = code[i + 3];
+                        if (isHexDigit(hex1) && isHexDigit(hex2)) {
+                            content += code.slice(i, i + 4);
+                            i += 4;
+                            continue;
+                        }
+                    }
+                    
+                    // Decimal escape \ddd
+                    if (isDigit(nextChar)) {
+                        let j = i + 1;
+                        let decStr = '';
+                        while (j < len && j < i + 4 && isDigit(code[j])) {
+                            decStr += code[j];
+                            j++;
+                        }
+                        const val = parseInt(decStr, 10);
+                        if (val <= 255) {
+                            content += code.slice(i, j);
+                            i = j;
+                            continue;
+                        }
+                        content += code.slice(i, i + 2);
+                        i += 2;
+                        continue;
+                    }
+                    
+                    // Unicode escape \u{XXX}
+                    if (nextChar === 'u' && i + 2 < len && code[i + 2] === '{') {
+                        let j = i + 3;
+                        let valid = true;
+                        while (j < len && code[j] !== '}') {
+                            if (!isHexDigit(code[j])) {
+                                valid = false;
+                                break;
+                            }
+                            j++;
+                        }
+                        if (j < len && code[j] === '}' && valid && j > i + 3) {
+                            content += code.slice(i, j + 1);
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                    
+                    // Unknown escape
+                    content += char;
+                    i++;
+                    continue;
+                }
+                
+                // Shouldn't reach here, but safety fallback
+                content += char;
+                i++;
+            }
+            
+            return { content, endIndex: i };
+        }
+        
+        // Optimized bracket matcher with minimal allocations
+        function matchLongBracketFast(code, startIndex, isComment, len) {
+            if (startIndex >= len || code[startIndex] !== '[') return null;
+            
+            let i = startIndex + 1;
+            let equalsCount = 0;
+            
+            // Count equals
+            while (i < len && code[i] === '=') {
+                equalsCount++;
+                i++;
+            }
+            
+            // Validate opening
+            if (i >= len || code[i] !== '[') return null;
+            
+            i++; // Skip second [
+            
+            // Search for matching closing bracket
+            while (i < len) {
+                if (code[i] === ']') {
+                    let j = i + 1;
+                    let closingEquals = 0;
+                    
+                    while (j < len && code[j] === '=' && closingEquals < equalsCount) {
+                        closingEquals++;
+                        j++;
+                    }
+                    
+                    if (closingEquals === equalsCount && j < len && code[j] === ']') {
+                        if (isComment) {
+                            return { content: '', endIndex: j + 1 };
+                        } else {
+                            return { 
+                                content: code.slice(startIndex, j + 1), 
+                                endIndex: j + 1 
+                            };
+                        }
+                    }
+                }
+                i++;
+            }
+            
+            return null;
+        }
+        
+        // Fast character type checks
+        function isHexDigit(char) {
+            const code = char.charCodeAt(0);
+            return (code >= 48 && code <= 57) ||   // 0-9
+                   (code >= 65 && code <= 70) ||   // A-F
+                   (code >= 97 && code <= 102);    // a-f
+        }
+        
+        function isDigit(char) {
+            const code = char.charCodeAt(0);
+            return code >= 48 && code <= 57; // 0-9
         }
         
         function findLineStart(str) {
@@ -547,171 +731,38 @@
             }
             return i + 1;
         }
+        
+        function findNextNonWhitespace(code, startIndex) {
+            let i = startIndex;
+            while (i < code.length && /\s/.test(code[i])) {
+                i++;
+            }
+            let word = '';
+            while (i < code.length && /[a-zA-Z_]/.test(code[i])) {
+                word += code[i];
+                i++;
+            }
+            return word;
+        }
+        
+        function getNextLine(code, startIndex) {
+            let i = startIndex;
+            let line = '';
+            while (i < code.length && code[i] !== '\n') {
+                line += code[i];
+                i++;
+            }
+            return line;
+        }
 
         function parseString(code, startIndex, quoteChar) {
-            let content = code[startIndex];
-            let i = startIndex + 1;
-            
-            while (i < code.length) {
-                const char = code[i];
-                
-                // Advanced escape sequence handling with full Lua 5.1-5.4 compatibility
-                if (char === '\\' && i + 1 < code.length) {
-                    const nextChar = code[i + 1];
-                    
-                    // Standard single-character escapes: \a \b \f \n \r \t \v \\ \" \'
-                    if ('abfnrtv\\"\''.includes(nextChar)) {
-                        content += char + nextChar;
-                        i += 2;
-                    }
-                    // Line continuation: backslash followed by actual newline
-                    else if (nextChar === '\n') {
-                        content += char + nextChar;
-                        i += 2;
-                    }
-                    // \z: skip all subsequent whitespace characters (Lua 5.2+)
-                    else if (nextChar === 'z') {
-                        content += char + nextChar;
-                        i += 2;
-                        // Skip all whitespace after \z
-                        while (i < code.length && /\s/.test(code[i])) {
-                            content += code[i];
-                            i++;
-                        }
-                    }
-                    // \xXX: hexadecimal byte escape (exactly 2 hex digits required)
-                    else if (nextChar === 'x') {
-                        // Validate that next 2 characters are valid hex digits
-                        if (i + 3 < code.length && 
-                            /[0-9a-fA-F]/.test(code[i + 2]) && 
-                            /[0-9a-fA-F]/.test(code[i + 3])) {
-                            content += code.slice(i, i + 4);
-                            i += 4;
-                        } else {
-                            // Invalid hex escape - preserve backslash and continue
-                            content += char;
-                            i++;
-                        }
-                    }
-                    // \ddd: decimal byte escape (1-3 decimal digits, value must be 0-255)
-                    else if (/\d/.test(nextChar)) {
-                        let j = i + 1;
-                        let decimalValue = '';
-                        // Collect up to 3 decimal digits
-                        while (j < code.length && j < i + 4 && /\d/.test(code[j])) {
-                            decimalValue += code[j];
-                            j++;
-                        }
-                        // Validate that decimal value is in valid byte range (0-255)
-                        const value = parseInt(decimalValue, 10);
-                        if (value <= 255) {
-                            content += code.slice(i, j);
-                            i = j;
-                        } else {
-                            // Value exceeds 255 - only use first digit to stay in range
-                            content += code.slice(i, i + 2);
-                            i += 2;
-                        }
-                    }
-                    // \u{XXX}: Unicode escape sequence (Lua 5.3+)
-                    // Supports variable-length hex sequences in braces
-                    else if (nextChar === 'u' && i + 2 < code.length && code[i + 2] === '{') {
-                        let j = i + 3;
-                        let validHex = true;
-                        // Validate all characters until closing brace are hex digits
-                        while (j < code.length && code[j] !== '}') {
-                            if (!/[0-9a-fA-F]/.test(code[j])) {
-                                validHex = false;
-                                break;
-                            }
-                            j++;
-                        }
-                        // If properly formed unicode escape, include it
-                        if (j < code.length && code[j] === '}' && validHex && j > i + 3) {
-                            content += code.slice(i, j + 1);
-                            i = j + 1;
-                        } else {
-                            // Malformed unicode escape - preserve backslash
-                            content += char;
-                            i++;
-                        }
-                    }
-                    // Unknown/invalid escape sequence - preserve the backslash
-                    else {
-                        content += char;
-                        i++;
-                    }
-                }
-                // Found matching closing quote - end of string
-                else if (char === quoteChar) {
-                    content += char;
-                    i++;
-                    break;
-                }
-                // Regular character within string - preserve as-is
-                else {
-                    content += char;
-                    i++;
-                }
-            }
-            
-            return { content, endIndex: i };
+            // This is now handled by parseStringFast, kept for compatibility
+            return parseStringFast(code, startIndex, quoteChar, code.length);
         }
 
         function matchLongBracket(code, startIndex, isComment) {
-            // Long brackets in Lua: [[ ]], [=[ ]=], [==[ ]==], etc.
-            // The number of '=' signs must match between opening and closing
-            
-            if (startIndex >= code.length || code[startIndex] !== '[') return null;
-            
-            let i = startIndex + 1;
-            let equalsCount = 0;
-            
-            // Count the number of '=' signs in the opening bracket
-            while (i < code.length && code[i] === '=') {
-                equalsCount++;
-                i++;
-            }
-            
-            // Must be followed by another '[' to form valid opening bracket
-            if (i >= code.length || code[i] !== '[') return null;
-            
-            const openingBracket = '[' + '='.repeat(equalsCount) + '[';
-            const closingBracket = ']' + '='.repeat(equalsCount) + ']';
-            
-            i++; // Move past the second '['
-            
-            // Search for the matching closing bracket with exact same number of '='
-            while (i < code.length) {
-                if (code[i] === ']') {
-                    let j = i + 1;
-                    let closingEquals = 0;
-                    
-                    // Count '=' signs in potential closing bracket
-                    while (j < code.length && code[j] === '=' && closingEquals < equalsCount) {
-                        closingEquals++;
-                        j++;
-                    }
-                    
-                    // Check if this is the exact matching closing bracket
-                    if (closingEquals === equalsCount && j < code.length && code[j] === ']') {
-                        if (isComment) {
-                            // For multi-line comments, return empty content (removing it)
-                            return { content: '', endIndex: j + 1 };
-                        } else {
-                            // For long string literals, preserve entire content including brackets
-                            return { 
-                                content: code.substring(startIndex, j + 1), 
-                                endIndex: j + 1 
-                            };
-                        }
-                    }
-                }
-                i++;
-            }
-            
-            // No matching closing bracket found - not a valid long bracket syntax
-            return null;
+            // This is now handled by matchLongBracketFast, kept for compatibility
+            return matchLongBracketFast(code, startIndex, isComment, code.length);
         }
 
         function processWhitespace(code) {
